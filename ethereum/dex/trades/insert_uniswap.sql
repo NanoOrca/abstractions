@@ -5,20 +5,20 @@ BEGIN
 WITH rows AS (
     INSERT INTO dex.trades (
         block_time,
-        token_a_symbol,
-        token_b_symbol,
-        token_a_amount,
-        token_b_amount,
+        token_bought_symbol,
+        token_sold_symbol,
+        token_bought_amount,
+        token_sold_amount,
         project,
         version,
         category,
-        trader_a,
-        trader_b,
-        token_a_amount_raw,
-        token_b_amount_raw,
+        buyer,
+        seller,
+        token_bought_amount_raw,
+        token_sold_amount_raw,
         usd_amount,
-        token_a_address,
-        token_b_address,
+        token_bought_address,
+        token_sold_address,
         exchange_contract_address,
         tx_hash,
         tx_from,
@@ -31,22 +31,22 @@ WITH rows AS (
         dexs.block_time,
         erc20a.symbol AS token_a_symbol,
         erc20b.symbol AS token_b_symbol,
-        token_a_amount_raw / 10 ^ erc20a.decimals AS token_a_amount,
-        token_b_amount_raw / 10 ^ erc20b.decimals AS token_b_amount,
+        token_bought_amount_raw / 10 ^ erc20a.decimals AS token_bought_amount,
+        token_sold_amount_raw / 10 ^ erc20b.decimals AS token_sold_amount,
         project,
         version,
         category,
-        coalesce(trader_a, tx."from") as trader_a, -- subqueries rely on this COALESCE to avoid redundant joins with the transactions table
-        trader_b,
-        token_a_amount_raw,
-        token_b_amount_raw,
+        coalesce(buyer, tx."from") as trader_a, -- subqueries rely on this COALESCE to avoid redundant joins with the transactions table
+        seller,
+        token_bought_amount_raw,
+        token_sold_amount_raw,
         coalesce(
             usd_amount,
-            token_a_amount_raw / 10 ^ pa.decimals * pa.price,
-            token_b_amount_raw / 10 ^ pb.decimals * pb.price
+            token_bought_amount_raw / 10 ^ pa.decimals * pa.price,
+            token_sold_amount_raw / 10 ^ pb.decimals * pb.price
         ) as usd_amount,
-        token_a_address,
-        token_b_address,
+        token_bought_address,
+        token_sold_address,
         exchange_contract_address,
         tx_hash,
         tx."from" as tx_from,
@@ -61,13 +61,13 @@ WITH rows AS (
             'Uniswap' AS project,
             '1' AS version,
             'DEX' AS category,
-            buyer AS trader_a,
-            NULL::bytea AS trader_b,
-            tokens_bought token_a_amount_raw,
-            eth_sold token_b_amount_raw,
+            buyer AS buyer,
+            t.contract_address AS seller,	--On AMMs the contract pair is always the seller (the LP is the seller)
+            tokens_bought AS token_bought_amount_raw,
+            eth_sold AS token_sold_amount_raw,
             NULL::numeric AS usd_amount,
-            f.token AS token_a_address,
-            '\xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2'::bytea AS token_b_address, --Using WETH for easier joining with USD price table
+            f.token AS token_bought_address,
+            '\xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2'::bytea AS token_sold_address, --Using WETH for easier joining with USD price table
             t.contract_address exchange_contract_address,
             t.evt_tx_hash AS tx_hash,
             NULL::integer[] AS trace_address,
@@ -84,13 +84,13 @@ WITH rows AS (
             'Uniswap' AS project,
             '1' AS version,
             'DEX' AS category,
-            buyer AS trader_a,
-            NULL::bytea AS trader_b,
-            eth_bought token_a_amount_raw,
-            tokens_sold token_b_amount_raw,
+            buyer AS buyer,
+            t.contract_address AS seller,	--On AMMs the contract pair is always the seller (the LP is the seller)
+            eth_bought token_bought_amount_raw,
+            tokens_sold token_sold_amount_raw,
             NULL::numeric AS usd_amount,
-            '\xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2'::bytea token_a_address, --Using WETH for easier joining with USD price table
-            f.token AS token_b_address,
+            '\xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2'::bytea token_bought_address, --Using WETH for easier joining with USD price table
+            f.token AS token_sold_address,
             t.contract_address exchange_contract_address,
             t.evt_tx_hash AS tx_hash,
             NULL::integer[] AS trace_address,
@@ -106,13 +106,13 @@ WITH rows AS (
             'Uniswap' AS project,
             '2' AS version,
             'DEX' AS category,
-            t."to" AS trader_a,
-            NULL::bytea AS trader_b,
-            CASE WHEN "amount0Out" = 0 THEN "amount1Out" ELSE "amount0Out" END AS token_a_amount_raw,
-            CASE WHEN "amount0In" = 0 THEN "amount1In" ELSE "amount0In" END AS token_b_amount_raw,
+            t."to" AS buyer, --The address the AMM is sending the tokens to.
+            t.contract_address AS seller,	--On AMMs the contract pair is always the seller (the LP is the seller)
+            CASE WHEN "amount0Out" = 0 THEN "amount1Out" ELSE "amount0Out" END AS token_bought_amount_raw, --AmountXout is tokens leaving the AMM
+            CASE WHEN "amount0In" = 0 THEN "amount1In" ELSE "amount0In" END AS token_sold_amount_raw,	--AmountXin is tokens arriving at the AMM
             NULL::numeric AS usd_amount,
-            CASE WHEN "amount0Out" = 0 THEN f.token1 ELSE f.token0 END AS token_a_address,
-            CASE WHEN "amount0In" = 0 THEN f.token1 ELSE f.token0 END AS token_b_address,
+            CASE WHEN "amount0Out" = 0 THEN f.token1 ELSE f.token0 END AS token_bought_address, -- If amount0out = 0, token 1 is being bought (leaving AMM)
+            CASE WHEN "amount0In" = 0 THEN f.token1 ELSE f.token0 END AS token_sold_address,	-- If amount0in = 0, token 1 is being sold (going to AMM)
             t.contract_address AS exchange_contract_address,
             t.evt_tx_hash AS tx_hash,
             NULL::integer[] AS trace_address,
@@ -132,13 +132,13 @@ WITH rows AS (
             'Uniswap' AS project,
             '3' AS version,
             'DEX' AS category,
-            t."recipient" AS trader_a,
-            NULL::bytea AS trader_b,
-            abs(amount0) AS token_a_amount_raw,
-            abs(amount1) AS token_b_amount_raw,
+            t."recipient" AS buyer,		-- Who the AMM is sending tokens to
+            t.contract_address AS seller,	--On AMMs the contract pair is always the seller (the LP is the seller)
+            CASE WHEN amount0 < 0 THEN abs(amount0) ELSE abs(amount1) END AS token_bought_amount_raw, -- The number on the name of the column indicates the token (token0 or token1).
+            CASE WHEN amount0 < 0 THEN amount1 ELSE amount0 END AS token_sold_amount_raw,	-- Negative amounts means tokens leaving the LP
             NULL::numeric AS usd_amount,
-            f.token0 AS token_a_address,
-            f.token1 AS token_b_address,
+            CASE WHEN amount0 < 0 THEN f.token0 ELSE f.token1 END AS token_bought_address, -- Amount0 < 0 means token0 is leaving the AMM
+            CASE WHEN amount0 < 0 THEN f.token1 ELSE f.token0 END AS token_sold_address,	-- Amount0 < 0 means token1 is arrriving at the AMM
             t.contract_address as exchange_contract_address,
             t.evt_tx_hash AS tx_hash,
             NULL::integer[] AS trace_address,
@@ -174,6 +174,21 @@ SELECT count(*) INTO r from rows;
 RETURN r;
 END
 $function$;
+
+-- fill 2018
+SELECT dex.insert_uniswap(
+    '2018-01-01',
+    '2019-01-01',
+    (SELECT max(number) FROM ethereum.blocks WHERE time < '2018-01-01'),
+    (SELECT max(number) FROM ethereum.blocks WHERE time <= '2019-01-01')
+)
+WHERE NOT EXISTS (
+    SELECT *
+    FROM dex.trades
+    WHERE block_time > '2018-01-01'
+    AND block_time <= '2019-01-01'
+    AND project = 'Uniswap'
+);
 
 -- fill 2019
 SELECT dex.insert_uniswap(
